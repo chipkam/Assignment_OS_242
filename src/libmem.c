@@ -100,7 +100,7 @@ int __alloc(struct pcb_t *caller, int vmaid, int rgid, int size, int *alloc_addr
    */
   /* SYSCALL 17 sys_memmap */
   struct sc_regs regs;
-  //regs.a0 = 17;                    // syscall number: 17
+  regs.a0 = 17;                    // syscall number: 17
   regs.a1 = SYSMEM_INC_OP;         // operation: increase
   regs.a2 = inc_sz;                // how much to increase
   regs.a3 = vmaid;                 // which VMA to expand
@@ -240,7 +240,7 @@ int pg_getpage(struct mm_struct *mm, int pgn, int *fpn, struct pcb_t *caller)
 
     /* Update page table */
     pte_set_fpn(&mm->pgd[pgn], tgtfpn);   // Set the frame number of the target page
-    //pte_set_present(mm->pgd[pgn]);       // Mark the page as present
+    pte_set_present(mm->pgd[pgn]);       // Mark the page as present
 
     /* Update its online status of the target page */
     //pte_set_fpn() &
