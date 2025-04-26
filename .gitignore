@@ -1,1 +1,10 @@
+# Ignore Zone Identifier files
 *Zone.Identifier
+
+# Ignore input files
+input/
+
+# Ignore output files
+output/
+
+obj/
