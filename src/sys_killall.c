@@ -12,6 +12,9 @@
 #include "syscall.h"
 #include "stdio.h"
 #include "libmem.h"
+#include "queue.h"
+#include <string.h>
+#include <stdlib.h>
 
 int __sys_killall(struct pcb_t *caller, struct sc_regs* regs)
 {
@@ -36,13 +39,50 @@ int __sys_killall(struct pcb_t *caller, struct sc_regs* regs)
     /* TODO: Traverse proclist to terminate the proc
      *       stcmp to check the process match proc_name
      */
-    //caller->running_list
-    //caller->mlq_ready_queu
+    // Traverse running_list
+    struct queue_t *running_list = caller->running_list;
+    for (int i = 0; i < running_list->size;) {
+        if (strcmp(running_list->proc[i]->path, proc_name) == 0) {
+#ifdef MMDBG
+            printf("[killall] Killing running proc \"%s\" (pid=%d)\n", running_list->proc[i]->path, running_list->proc[i]->pid);
+#endif
+            // Free memory of the killed process
+            free(running_list->proc[i]);
+            
+            // Shift left: move remaining processes to the left in the array
+            for (int j = i; j < running_list->size - 1; j++) {
+                running_list->proc[j] = running_list->proc[j + 1];
+            }
+            running_list->size--;  // Decrease the size of the running list
+            // Don't increment i, stay at current index since we shifted
+        } else {
+            i++;  // Move to the next process
+        }
+    }
 
-    /* TODO Maching and terminating 
-     *       all processes with given
-     *        name in var proc_name
-     */
+#ifdef MLQ_SCHED
+    // Traverse mlq_ready_queue
+    for (int prio = 0; prio < MAX_PRIO; prio++) {
+        struct queue_t *q = &caller->mlq_ready_queue[prio];
+        for (int i = 0; i < q->size;) {
+            if (strcmp(q->proc[i]->path, proc_name) == 0) {
+#ifdef MMDBG
+                printf("[killall] Killing ready proc \"%s\" (pid=%d) at prio %d\n", q->proc[i]->path, q->proc[i]->pid, prio);
+#endif                
+                // Free memory of the killed process
+                free(q->proc[i]);
+                
+                // Shift left: move remaining processes to the left in the array
+                for (int j = i; j < q->size - 1; j++) {
+                    q->proc[j] = q->proc[j + 1];
+                }
+                q->size--;  // Decrease the size of the queue
+            } else {
+                i++;  // Move to the next process
+            }
+        }
+    }  
+#endif
 
     return 0; 
 }

@@ -86,36 +86,46 @@ int __alloc(struct pcb_t *caller, int vmaid, int rgid, int size, int *alloc_addr
   }
 
   /* TODO get_free_vmrg_area FAILED handle the region management (Fig.6)*/
-
   /* TODO retrive current vma if needed, current comment out due to compiler redundant warning*/
   /*Attempt to increate limit to get space */
-  //struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
-
-
-  //int inc_sz = PAGING_PAGE_ALIGNSZ(size);
-  //int inc_limit_ret;
+  // struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
+  int inc_sz = PAGING_PAGE_ALIGNSZ(size);
+  int inc_limit_ret;
 
   /* TODO retrive old_sbrk if needed, current comment out due to compiler redundant warning*/
-  //int old_sbrk = cur_vma->sbrk;
+  // int old_sbrk = cur_vma->sbrk;
 
   /* TODO INCREASE THE LIMIT as inovking systemcall 
    * sys_memap with SYSMEM_INC_OP 
    */
-  //struct sc_regs regs;
-  //regs.a1 = ...
-  //regs.a2 = ...
-  //regs.a3 = ...
-  
   /* SYSCALL 17 sys_memmap */
+  struct sc_regs regs;
+  //regs.a0 = 17;                    // syscall number: 17
+  regs.a1 = SYSMEM_INC_OP;         // operation: increase
+  regs.a2 = inc_sz;                // how much to increase
+  regs.a3 = vmaid;                 // which VMA to expand
 
   /* TODO: commit the limit increment */
+  inc_limit_ret = syscall(caller, 17, &regs);
+  /* TODO: commit the allocation address */
+  if (inc_limit_ret < 0) {
+    printf("Memory limit increase failed.\n");
+    return -1;  // Return failure if limit increase fails
+  }
 
-  /* TODO: commit the allocation address 
-  // *alloc_addr = ...
-  */
+  /* After increasing the limit, retry allocation */
+  if (get_free_vmrg_area(caller, vmaid, size, &rgnode) == 0) {
+    caller->mm->symrgtbl[rgid].rg_start = rgnode.rg_start;
+    caller->mm->symrgtbl[rgid].rg_end = rgnode.rg_end;
 
-  return 0;
+    *alloc_addr = rgnode.rg_start;
 
+    pthread_mutex_unlock(&mmvm_lock);
+    return 0;
+  }
+
+  /* If allocation still fails, return error */
+  return -1;
 }
 
 /*__free - remove a region memory
@@ -206,29 +216,31 @@ int pg_getpage(struct mm_struct *mm, int pgn, int *fpn, struct pcb_t *caller)
      * SYSCALL 17 sys_memmap 
      * with operation SYSMEM_SWP_OP
      */
-    //struct sc_regs regs;
-    //regs.a1 =...
-    //regs.a2 =...
-    //regs.a3 =..
+    struct sc_regs regs;
+    regs.a1 = SYSMEM_SWP_OP;                // Swap operation
+    regs.a2 = PAGING_FPN(mm->pgd[vicpgn]);  // Victim frame number
+    regs.a3 = swpfpn;                       // Swap frame number
 
     /* SYSCALL 17 sys_memmap */
+    syscall(caller, 17, &regs);
 
     /* TODO copy target frame form swap to mem 
      * SWP(tgtfpn <--> vicfpn)
      * SYSCALL 17 sys_memmap
      * with operation SYSMEM_SWP_OP
      */
-    /* TODO copy target frame form swap to mem 
-    //regs.a1 =...
-    //regs.a2 =...
-    //regs.a3 =..
-    */
+    /* TODO copy target frame form swap to mem */
+    int tgtfpn = swpfpn;  // The frame where the page will be loaded
 
+    regs.a2 = tgtfpn;                     // Target frame number
+    regs.a3 = PAGING_FPN(mm->pgd[pgn]);   // The swap frame for the target page
+    
     /* SYSCALL 17 sys_memmap */
+    syscall(caller, 17, &regs);
 
     /* Update page table */
-    //pte_set_swap() 
-    //mm->pgd;
+    pte_set_fpn(&mm->pgd[pgn], tgtfpn);   // Set the frame number of the target page
+    //pte_set_present(mm->pgd[pgn]);       // Mark the page as present
 
     /* Update its online status of the target page */
     //pte_set_fpn() &
@@ -265,15 +277,15 @@ int pg_getval(struct mm_struct *mm, int addr, BYTE *data, struct pcb_t *caller)
    *  SYSCALL 17 sys_memmap with SYSMEM_IO_READ
    */
   // int phyaddr
-  //struct sc_regs regs;
-  //regs.a1 = ...
-  //regs.a2 = ...
-  //regs.a3 = ...
+  struct sc_regs regs;
+  regs.a1 = SYSMEM_IO_READ;         // Operation: read from memory
+  regs.a2 = addr;                // Physical address to read from
+  regs.a3 = 0;                      // We don't need to write anything to memory, just reading
 
   /* SYSCALL 17 sys_memmap */
-
+  syscall(caller, 17, &regs);
   // Update data
-  // data = (BYTE)
+  *data = regs.a3;  // The value read from memory will be stored in regs.a3
 
   return 0;
 }
@@ -287,7 +299,7 @@ int pg_getval(struct mm_struct *mm, int addr, BYTE *data, struct pcb_t *caller)
 int pg_setval(struct mm_struct *mm, int addr, BYTE value, struct pcb_t *caller)
 {
   int pgn = PAGING_PGN(addr);
-  //int off = PAGING_OFFST(addr);
+  int off = PAGING_OFFST(addr);
   int fpn;
 
   /* Get the page to MEMRAM, swap from MEMSWAP if needed */
@@ -299,14 +311,14 @@ int pg_setval(struct mm_struct *mm, int addr, BYTE value, struct pcb_t *caller)
    *  MEMPHY WRITE
    *  SYSCALL 17 sys_memmap with SYSMEM_IO_WRITE
    */
-  // int phyaddr
-  //struct sc_regs regs;
-  //regs.a1 = ...
-  //regs.a2 = ...
-  //regs.a3 = ...
+  int phyaddr = fpn * PAGE_SIZE + off;  // Physical address calculation
+  struct sc_regs regs;
+  regs.a1 = SYSMEM_IO_WRITE;        // Operation: write to memory
+  regs.a2 = phyaddr;                // Physical address to write to
+  regs.a3 = value;                  // Value to be written to memory
 
   /* SYSCALL 17 sys_memmap */
-
+  syscall(caller, 17, &regs);
   // Update data
   // data = (BYTE) 
 
@@ -460,10 +472,43 @@ int get_free_vmrg_area(struct pcb_t *caller, int vmaid, int size, struct vm_rg_s
   newrg->rg_start = newrg->rg_end = -1;
 
   /* TODO Traverse on list of free vm region to find a fit space */
-  //while (...)
-  // ..
+  while (rgit != NULL) {
+    unsigned long region_sz = rgit->rg_end - rgit->rg_start;
+    if (region_sz >= size) {
+      // Found a suitable region, fill in newrg
+      newrg->rg_start = rgit->rg_start;
+      newrg->rg_end = rgit->rg_start + size;
+      // Update the remaining part of this free region
+      rgit->rg_start += size;
 
-  return 0;
+      // If the region is fully used, remove it from the list
+      if (rgit->rg_start >= rgit->rg_end) // Logically: if (rgit->rg_start == rgit->rg_end)
+      {
+        // Remove rgit from list
+        struct vm_rg_struct *prev = NULL, *cur = cur_vma->vm_freerg_list;
+        while (cur && cur != rgit)
+        {
+          prev = cur;
+          cur = cur->rg_next;
+        }
+
+        if (prev == NULL) // head of list
+        {
+          cur_vma->vm_freerg_list = rgit->rg_next;
+        }
+        else
+        {
+          prev->rg_next = rgit->rg_next;
+        }
+      }
+
+      return 0; // success
+    }
+
+    rgit = rgit->rg_next; // move to next free region
+  }
+
+  return -1; // no region large enough
 }
 
 //#endif

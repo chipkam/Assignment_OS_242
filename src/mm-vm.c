@@ -55,13 +55,20 @@ struct vm_rg_struct *get_vm_area_node_at_brk(struct pcb_t *caller, int vmaid, in
   struct vm_rg_struct * newrg;
   /* TODO retrive current vma to obtain newrg, current comment out due to compiler redundant warning*/
   //struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
+  struct vm_area_struct *cur_vma=get_vma_by_num(caller->mm,vmaid);
+  if(!cur_vma) return NULL;
 
   newrg = malloc(sizeof(struct vm_rg_struct));
-
+  
+  if(!newrg) return NULL;
+  
   /* TODO: update the newrg boundary
   // newrg->rg_start = ...
   // newrg->rg_end = ...
   */
+  newrg->rg_start=cur_vma->sbrk;
+  newrg->rg_end=newrg->rg_start+alignedsz;
+  newrg->rg_next=NULL;
 
   return newrg;
 }
@@ -78,6 +85,9 @@ int validate_overlap_vm_area(struct pcb_t *caller, int vmaid, int vmastart, int 
   //struct vm_area_struct *vma = caller->mm->mmap;
 
   /* TODO validate the planned memory area is not overlapped */
+  struct vm_area_struct *vma=get_vma_by_num(caller->mm,vmaid);
+  if(!vma) return -1;
+  if(vmastart<vma->vm_end) return -1;
 
   return 0;
 }
@@ -98,6 +108,8 @@ int inc_vma_limit(struct pcb_t *caller, int vmaid, int inc_sz)
 
   int old_end = cur_vma->vm_end;
 
+  if(!cur_vma) return -1;
+  if(!area) return -1;
   /*Validate overlap of obtained region */
   if (validate_overlap_vm_area(caller, vmaid, area->rg_start, area->rg_end) < 0)
     return -1; /*Overlap and failed allocation */
@@ -105,11 +117,14 @@ int inc_vma_limit(struct pcb_t *caller, int vmaid, int inc_sz)
   /* TODO: Obtain the new vm area based on vmaid */
   //cur_vma->vm_end... 
   // inc_limit_ret...
+  cur_vma->sbrk=area->rg_end;
+  cur_vma->vm_end=area->rg_end;
 
   if (vm_map_ram(caller, area->rg_start, area->rg_end, 
                     old_end, incnumpage , newrg) < 0)
     return -1; /* Map the memory to MEMRAM */
 
+  free(area);
   return 0;
 }
 
