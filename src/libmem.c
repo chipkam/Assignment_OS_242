@@ -94,7 +94,6 @@
        return -1;
    }
  
-   int old_sbrk = cur_vma->sbrk;
    // SYSCALL
    struct sc_regs regs;
    regs.a1 = SYSMEM_INC_OP;         // operation: increase
@@ -135,9 +134,9 @@
      return -1;
    }
  
-   struct vm_rg_struct *rgnode = get_symrg_byid(caller->mm, rgid);
+   struct vm_rg_struct rgnode = *get_symrg_byid(caller->mm, rgid);
    // Check for invalid or already empty region
-   if (rgnode == NULL || rgnode->rg_start == 0 && rgnode->rg_end == 0) {
+   if (rgnode == NULL || (rgnode->rg_start == 0 && rgnode->rg_end == 0)) {
      printf("Invalid or already empty region");
      return -1; 
    }
@@ -191,15 +190,15 @@
  
    if (!PAGING_PAGE_PRESENT(pte))
    {
-     int vicpgn, swpfpn; 
-     int vicfpn;
-     uint32_t vicpte;
-     int tgtfpn = PAGING_PTE_SWP(pte); //the target frame storing our variable
- 
-     // Find victim page
-     if (find_victim_page(caller, caller->mm, &vicpgn) == 0) {
-       return -1;
-     }
+    int vicpgn, swpfpn;
+    int tgtfpn = PAGING_SWP(pte); // frame chứa dữ liệu của page cần gọi
+
+    // Tìm victim page từ danh sách FIFO
+    if (find_victim_page(mm, &vicpgn) == -1)
+      return -1;
+
+    uint32_t vicpte = mm->pgd[vicpgn];
+    int vicfpn = PAGING_FPN(vicpte);
  
      /* Get free frame in MEMSWP */
      if (MEMPHY_get_freefp(caller->active_mswp, &swpfpn) == 0) {
@@ -208,20 +207,20 @@
  
      // Swap frame from MEMRAM to MEMSWP 
      struct sc_regs regs;
-     regs.a1 = SYSMEM_SWP_OP;                // Swap operation
-     regs.a2 = PAGING_FPN(mm->pgd[vicpgn]);  // Victim frame number
-     regs.a3 = swpfpn;                       // Swap frame number
+     regs.a1 = SYSMEM_SWP_OP;               
+     regs.a2 = vicfpn;                
+     regs.a3 = swpfpn;                     
      syscall(caller, 17, &regs);
  
      // Swap frame from MEMSWP to MEMRAM 
      regs.a1 = SYSMEM_SWP_OP;  
-     regs.a2 = tgtfpn;                     // Target frame number
-     regs.a3 = PAGING_FPN(mm->pgd[pgn]);   // The swap frame for the target page
+     regs.a2 = tgtfpn;                     
+     regs.a3 = vicfpn;   
      syscall(caller, 17, &regs);
  
      /* Update page table */
-     pte_set_fpn(mm->pgd[pgn], tgtfpn);   // Set the frame number of the target page
-     pte_set_present(mm->pgd[pgn]);       // Mark the page as present
+     pte_set_swap(&mm->pgd[vicpgn], 0, swpfpn);     // Victim swapped
+     pte_set_fpn(&mm->pgd[pgn], vicfpn);            // Update page
  
      enlist_pgn_node(&caller->mm->fifo_pgn,pgn);
    }
@@ -426,7 +425,7 @@
    if (!flag_found) return -1;
  
    *retpgn = pg->pgn; // Return page number
-   mm->fifo_pgn = pg->next; // Update the fifo list (remove the current head)
+   mm->fifo_pgn = pg->pg_next; // Update the fifo list (remove the current head)
    // Free the node
    free(pg);
  
