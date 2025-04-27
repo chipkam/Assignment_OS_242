@@ -134,14 +134,14 @@
      return -1;
    }
  
-   struct vm_rg_struct rgnode = *get_symrg_byid(caller->mm, rgid);
+   struct vm_rg_struct *rgnode = get_symrg_byid(caller->mm, rgid);
    // Check for invalid or already empty region
    if (rgnode == NULL || (rgnode->rg_start == 0 && rgnode->rg_end == 0)) {
      printf("Invalid or already empty region");
      return -1; 
    }
    /*enlist the obsoleted memory region */
-   enlist_vm_freerg_list(caller->mm, &rgnode);
+   enlist_vm_freerg_list(caller->mm, rgnode);
    /* Invalidate the symbol table entry after freeing */
    caller->mm->symrgtbl[rgid].rg_start = 0;
    caller->mm->symrgtbl[rgid].rg_end = 0;
