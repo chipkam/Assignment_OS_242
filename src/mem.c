@@ -156,6 +156,7 @@ void dump(void) {
 				_mem_stat[i].index,
 				_mem_stat[i].next
 			);
+			
 			int j;
 			for (	j = i << OFFSET_LEN;
 				j < ((i+1) << OFFSET_LEN) - 1;

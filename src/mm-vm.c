@@ -62,8 +62,7 @@
    /* TODO: update the newrg boundary */
    newrg->rg_start = cur_vma->sbrk;
    newrg->rg_end = newrg->rg_start + alignedsz;
- 
-   cur_vma->sbrk += size;
+   newrg->rg_next = NULL;
    
    return newrg;
  }
@@ -82,11 +81,13 @@
    
    /* TODO validate the planned memory area is not overlapped */
    while (vma != NULL) {
-     if (!(vmastart >= vma->vm_end || vmaend <= vma->vm_start)) {
-       // Overlap found
-       return -1;
-     }
-     vma = vma->vm_next;
+    if (vma->vm_id != vmaid) {
+      if (!(vmastart >= vma->vm_end || vmaend <= vma->vm_start)) {
+        // Overlap found
+        return -1;
+      }
+    }
+    vma = vma->vm_next;
    }
  
    // No overlap found
@@ -114,14 +115,16 @@
      return -1; /*Overlap and failed allocation */
  
    /* TODO: Obtain the new vm area based on vmaid */
-   cur_vma->vm_end = area->rg_end; 
-   int inc_limit_ret = cur_vma->vm_end;
- 
+   if (area->rg_end > cur_vma->vm_end) {
+    cur_vma->vm_end += inc_amt; 
+    cur_vma->sbrk += inc_sz;
+   }
+
    if (vm_map_ram(caller, area->rg_start, area->rg_end, 
                      old_end, incnumpage , newrg) < 0)
      return -1; /* Map the memory to MEMRAM */
  
-   return inc_limit_ret; // return new limit
+   return 0;
  }
  
  // #endif

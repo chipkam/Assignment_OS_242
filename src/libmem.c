@@ -23,7 +23,7 @@
  #include <pthread.h>
  
  static pthread_mutex_t mmvm_lock = PTHREAD_MUTEX_INITIALIZER;
- 
+
  /*enlist_vm_freerg_list - add new rg to freerg_list
   *@mm: memory region
   *@rg_elmt: new region
@@ -79,7 +79,12 @@
      caller->mm->symrgtbl[rgid].rg_end = rgnode.rg_end;
   
      *alloc_addr = rgnode.rg_start;
- 
+
+#ifdef MMDBG
+     printf("===== PHYSICAL MEMORY AFTER ALLOCATION =====");
+     printf("PID=%d - Region=%d - Address=%001x - Size=%d byte\n", caller->pid, rgid, rgnode.rg_start, size);
+     printf("================================================================\n");
+#endif
      pthread_mutex_unlock(&mmvm_lock);
      return 0;
    }
@@ -94,31 +99,33 @@
        return -1;
    }
  
+   pthread_mutex_unlock(&mmvm_lock);
    // SYSCALL
-   struct sc_regs regs;
+   struct sc_regs regs = {0};
    regs.a1 = SYSMEM_INC_OP;         // operation: increase
-   regs.a2 = inc_sz;                // how much to increase
-   regs.a3 = vmaid;                 // which VMA to expand
+   regs.a2 = vmaid;                 // which VMA to expand
+   regs.a3 = inc_sz;                // how much to increase
    inc_limit_ret = syscall(caller, 17, &regs);
  
    if (inc_limit_ret < 0) {
      printf("Memory limit increase failed.\n");
+     //pthread_mutex_unlock(&mmvm_lock);
      return -1;  // Return failure if limit increase fails
    }
- 
+   
+   pthread_mutex_lock(&mmvm_lock);
    /* After increasing the limit, retry allocation */
-   if (get_free_vmrg_area(caller, vmaid, size, &rgnode) == 0) {
-     caller->mm->symrgtbl[rgid].rg_start = rgnode.rg_start;
-     caller->mm->symrgtbl[rgid].rg_end = rgnode.rg_end;
+   caller->mm->symrgtbl[rgid].rg_start = rgnode.rg_start;
+   caller->mm->symrgtbl[rgid].rg_end = rgnode.rg_end;
  
-     *alloc_addr = rgnode.rg_start;
- 
-     pthread_mutex_unlock(&mmvm_lock);
-     return 0;
-   }
-   /* If allocation still fails, return error */
+   *alloc_addr = rgnode.rg_start;
+#ifdef MMDBG
+   printf("===== PHYSICAL MEMORY AFTER ALLOCATION =====");
+   printf("PID=%d - Region=%d - Address=%001x - Size=%d byte\n", caller->pid, rgid, rgnode.rg_start, size);
+   printf("================================================================\n");
+#endif
    pthread_mutex_unlock(&mmvm_lock);
-   return -1;
+     return 0;
  }
  
  /*__free - remove a region memory
@@ -130,23 +137,25 @@
   */
  int __free(struct pcb_t *caller, int vmaid, int rgid)
  {
+  //pthread_mutex_lock(&mmvm_lock);
    if (rgid < 0 || rgid > PAGING_MAX_SYMTBL_SZ){
      return -1;
    }
  
-   struct vm_rg_struct rgnode = *get_symrg_byid(caller->mm, rgid);
+   struct vm_rg_struct *rgnode = get_symrg_byid(caller->mm, rgid);
    // Check for invalid or already empty region
    if (rgnode == NULL || (rgnode->rg_start == 0 && rgnode->rg_end == 0)) {
      printf("Invalid or already empty region");
      return -1; 
    }
    /*enlist the obsoleted memory region */
-   enlist_vm_freerg_list(caller->mm, &rgnode);
+   enlist_vm_freerg_list(caller->mm, rgnode);
    /* Invalidate the symbol table entry after freeing */
    caller->mm->symrgtbl[rgid].rg_start = 0;
    caller->mm->symrgtbl[rgid].rg_end = 0;
    
    return 0;
+   //pthread_mutex_unlock(&mmvm_lock);
  }
  
  /*liballoc - PAGING-based allocate a region memory
@@ -252,6 +261,7 @@
    struct sc_regs regs;
    regs.a1 = SYSMEM_IO_READ;         // Operation: read from memory
    regs.a2 = phyaddr;                // Physical address to read from
+   regs.a3 = 0;                      // Will later be updated read value
    syscall(caller, 17, &regs);
    
    // Update data
@@ -319,14 +329,15 @@
    int val = __read(proc, 0, source, offset, &data);
  
    /* TODO update result of reading action*/
-   //destination 
- #ifdef IODUMP
-   printf("read region=%d offset=%d value=%d\n", source, offset, data);
- #ifdef PAGETBL_DUMP
-   print_pgtbl(proc, 0, -1); //print max TBL
- #endif
-   MEMPHY_dump(proc->mram);
- #endif
+
+   *destination = (uint32_t) data;
+//  #ifdef IODUMP
+//    printf("read region=%d offset=%d value=%d\n", source, offset, data);
+//  #ifdef PAGETBL_DUMP
+//    print_pgtbl(proc, 0, -1); //print max TBL
+//  #endif
+//    MEMPHY_dump(proc->mram);
+//  #endif
  
    return val;
  }
@@ -441,7 +452,6 @@
  int get_free_vmrg_area(struct pcb_t *caller, int vmaid, int size, struct vm_rg_struct *newrg)
  {
    struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
- 
    struct vm_rg_struct *rgit = cur_vma->vm_freerg_list;
  
    if (rgit == NULL)
@@ -452,42 +462,49 @@
  
    /* TODO Traverse on list of free vm region to find a fit space */
    while (rgit != NULL) {
-     unsigned long region_sz = rgit->rg_end - rgit->rg_start;
-     if (region_sz >= size) {
-       // Found a suitable region, fill in newrg
-       newrg->rg_start = rgit->rg_start;
-       newrg->rg_end = rgit->rg_start + size;
-       // Update the remaining part of this free region
-       rgit->rg_start += size;
- 
-       // If the region is fully used, remove it from the list
-       if (rgit->rg_start >= rgit->rg_end) // Logically: if (rgit->rg_start == rgit->rg_end)
-       {
-         // Remove rgit from list
-         struct vm_rg_struct *prev = NULL, *cur = cur_vma->vm_freerg_list;
-         while (cur && cur != rgit)
-         {
-           prev = cur;
-           cur = cur->rg_next;
-         }
- 
-         if (prev == NULL) // head of list
-         {
-           cur_vma->vm_freerg_list = rgit->rg_next;
-         }
-         else
-         {
-           prev->rg_next = rgit->rg_next;
-         }
-       }
- 
-       return 0; // success
-     }
- 
-     rgit = rgit->rg_next; // move to next free region
-   }
- 
-   return -1; // no region large enough
+		if (rgit->rg_start + size <= rgit->rg_end)
+		{ /* Current region has enough space */
+			newrg->rg_start = rgit->rg_start;
+			newrg->rg_end = rgit->rg_start + size;
+
+			/* Update left space in chosen region */
+			if (rgit->rg_start + size < rgit->rg_end)
+			{
+				rgit->rg_start = rgit->rg_start + size;
+			}
+			else
+			{ /*Use up all space, remove current node */
+				/*Clone next rg node */
+				struct vm_rg_struct *nextrg = rgit->rg_next;
+
+				/*Cloning */
+				if (nextrg != NULL)
+				{
+					rgit->rg_start = nextrg->rg_start;
+					rgit->rg_end = nextrg->rg_end;
+
+					rgit->rg_next = nextrg->rg_next;
+
+					free(nextrg);
+				}
+				else
+				{								   /*End of free list */
+					rgit->rg_start = rgit->rg_end; // dummy, size 0 region
+					rgit->rg_next = NULL;
+				}
+			}
+			break;
+		}
+		else
+		{
+			rgit = rgit->rg_next; // Traverse next rg
+		}
+	}
+
+	if (newrg->rg_start == -1) // new region not found
+		return -1;
+
+	return 0;
  }
  
  //#endif

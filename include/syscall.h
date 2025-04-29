@@ -17,7 +17,7 @@ struct sc_regs {
         uint32_t a4;
         uint32_t a5;
         uint32_t a6;
-
+        
         /*
          * orig_ax is used on entry for:
          * - the syscall number (syscall, sysenter, int80)
